@@ -12,7 +12,7 @@ from telegram.ext import (
 )
 
 from config import BOT_TOKEN
-from db import test_connection, insert_workout_rows
+import db
 
 
 WAITING_FOR_EXERCISE = "waiting_for_exercise"
@@ -187,7 +187,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def dbtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    db_name = test_connection()
+    db_name = db.test_connection()
     await update.message.reply_text(f"Подключение к базе работает: {db_name}")
 
 
@@ -211,7 +211,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("Нет данных для сохранения.")
             return
 
-        insert_workout_rows(rows)
+        db.insert_workout_rows(rows)
 
         context.user_data[PENDING_ROWS] = None
         context.user_data[WAITING_FOR_EXERCISE] = False
@@ -253,13 +253,49 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Данные некорректны: {e}\n\nПопробуй ещё раз по схеме:\n{TEMPLATE}"
         )
 
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    row = db.get_basic_stats()
 
+    text = (
+        "Общая статистика:\n\n"
+        f"Подходов: {row['total_sets']}\n"
+        f"Тренировочных дней: {row['training_days']}\n"
+        f"Уникальных упражнений: {row['unique_exercises']}\n"
+        f"Всего повторений: {row['total_reps']}\n"
+        f"Общий объём: {float(row['total_volume']):.1f} кг\n"
+        f"Период: {row['first_date']} — {row['last_date']}"
+    )
+
+    await update.message.reply_text(text)
+
+async def volume(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rows = db.get_volume_by_date()
+
+    if not rows:
+        await update.message.reply_text("Данных пока нет.")
+        return
+
+    lines = ["Объём по последним тренировочным дням:\n"]
+
+    for row in rows:
+        lines.append(
+            f"{row['date']} | "
+            f"объём: {float(row['total_volume']):.1f} кг | "
+            f"подходов: {row['sets_count']}"
+        )
+
+    await update.message.reply_text("\n".join(lines))
+
+# main
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("dbtest", dbtest))
     app.add_handler(CommandHandler("add_exercise", add_command))
+    app.add_handler(CommandHandler("last", last))
+    app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("volume", volume))
 
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
@@ -267,6 +303,27 @@ def main():
     print("Bot is running...")
     app.run_polling()
 
+#last_rows
+async def last(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rows = db.get_last_workouts(limit=10)
+
+    if not rows:
+        await update.message.reply_text("В базе пока нет тренировок.")
+        return
+
+    lines = ["Последние записи:\n"]
+
+    for row in rows:
+        lines.append(
+            f"#{row['id']} | {row['date']} | {row['exercise']} | "
+            f"{row['reps']} reps × {row['weight_kg']} kg | "
+            f"rpe: {row['rpe']} | notes: {row['notes']}"
+        )
+
+    await update.message.reply_text("\n".join(lines))
+
+
 
 if __name__ == "__main__":
     main()
+
