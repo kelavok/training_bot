@@ -13,6 +13,7 @@ from telegram.ext import (
 
 from config import BOT_TOKEN
 import db
+import analytics
 
 
 WAITING_FOR_EXERCISE = "waiting_for_exercise"
@@ -286,6 +287,24 @@ async def volume(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("\n".join(lines))
 
+
+async def score(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    latest_date = db.get_latest_training_date()
+
+    if not latest_date:
+        await update.message.reply_text("В базе пока нет тренировок.")
+        return
+
+    rows = db.get_workouts_by_date(latest_date)
+
+    if not rows:
+        await update.message.reply_text("Не нашёл строк для последней даты тренировки.")
+        return
+
+    result = analytics.calculate_session_scores(rows)
+    report = analytics.format_session_score_report(result)
+
+    await update.message.reply_text(report)
 # main
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -296,6 +315,7 @@ def main():
     app.add_handler(CommandHandler("last", last))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("volume", volume))
+    app.add_handler(CommandHandler("score", score))
 
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))

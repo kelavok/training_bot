@@ -128,3 +128,49 @@ def get_volume_by_date():
         rows = result.mappings().all()
 
     return rows
+
+#Connect with analytics
+def get_latest_training_date():
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT MAX(date) AS latest_date
+                FROM workouts
+            """)
+        )
+
+        latest_date = result.scalar()
+
+    return latest_date
+
+
+def get_workouts_by_date(training_date):
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT
+                    id,
+                    user_id,
+                    date,
+                    exercise,
+                    category,
+                    reps,
+                    weight_kg,
+                    rest_sec_after,
+                    duration_sec,
+                    rpe,
+                    notes
+                FROM workouts
+                WHERE date = :training_date
+                ORDER BY id
+            """),
+            {"training_date": training_date}
+        )
+
+        rows = result.mappings().all()
+
+    return rows
