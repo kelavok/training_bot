@@ -1,3 +1,5 @@
+from datetime import date
+import re
 from pathlib import Path
 import tempfile
 
@@ -399,6 +401,7 @@ def main():
     app.add_handler(CommandHandler("volume", volume))
     app.add_handler(CommandHandler("score", score))
     app.add_handler(CommandHandler("muscle_trend", muscle_trend))
+    app.add_handler(CommandHandler("score_chart", score_chart))
 
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))

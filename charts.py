@@ -26,6 +26,12 @@ def build_muscle_trend_data(rows: list[dict], top_n: int = 8) -> tuple[list, lis
     daily_scores = {}
     total_units_by_muscle = defaultdict(float)
 
+    # If a muscle receives only a tiny secondary contribution,
+    # we do not treat it as actually trained on that date.
+    # Example: Romanian Deadlift may touch back a little,
+    # but it should not create a "back day" point on the trend chart.
+    MIN_ACTUAL_MUSCLE_SHARE_OF_TARGET = 0.2
+
     for training_date in dates:
         result = analytics.calculate_session_scores(rows_by_date[training_date])
 
@@ -35,6 +41,16 @@ def build_muscle_trend_data(rows: list[dict], top_n: int = 8) -> tuple[list, lis
             muscle = muscle_row["muscle"]
             rating = muscle_row["rating_10"]
             units = muscle_row["score_units"]
+            target_units = muscle_row["target_units"]
+
+            if target_units > 0:
+                actual_share = units / target_units
+            else:
+                actual_share = 0
+
+            # Do not create a real data point from tiny secondary carryover.
+            if actual_share < MIN_ACTUAL_MUSCLE_SHARE_OF_TARGET:
+                continue
 
             muscle_scores[muscle] = rating
             total_units_by_muscle[muscle] += units
