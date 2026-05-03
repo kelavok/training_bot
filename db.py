@@ -174,3 +174,31 @@ def get_workouts_by_date(training_date):
         rows = result.mappings().all()
 
     return rows
+
+#get all workouts for analytics
+def get_all_workouts():
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT
+                    id,
+                    user_id,
+                    date,
+                    exercise,
+                    category,
+                    reps,
+                    weight_kg,
+                    rest_sec_after,
+                    duration_sec,
+                    rpe,
+                    notes
+                FROM workouts
+                ORDER BY date, id
+            """)
+        )
+
+        rows = result.mappings().all()
+
+    return rows

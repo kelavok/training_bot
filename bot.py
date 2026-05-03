@@ -1,5 +1,9 @@
-from datetime import date
-import re
+from pathlib import Path
+import tempfile
+
+import db
+import analytics
+import charts
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -14,6 +18,7 @@ from telegram.ext import (
 from config import BOT_TOKEN
 import db
 import analytics
+import charts
 
 
 WAITING_FOR_EXERCISE = "waiting_for_exercise"
@@ -305,7 +310,84 @@ async def score(update: Update, context: ContextTypes.DEFAULT_TYPE):
     report = analytics.format_session_score_report(result)
 
     await update.message.reply_text(report)
-# main
+
+
+#charts
+async def muscle_trend(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rows = db.get_all_workouts()
+
+    if not rows:
+        await update.message.reply_text("В базе пока нет тренировок.")
+        return
+
+    unique_dates = sorted({row["date"] for row in rows})
+
+    if len(unique_dates) < 2:
+        await update.message.reply_text(
+            "Для графика динамики нужно минимум 2 тренировочных дня."
+        )
+        return
+
+    with tempfile.NamedTemporaryFile(
+        suffix=".png",
+        delete=False,
+    ) as tmp_file:
+        output_path = Path(tmp_file.name)
+
+    try:
+        charts.save_muscle_trend_chart(
+            rows=rows,
+            output_path=output_path,
+            top_n=8,
+        )
+
+        with open(output_path, "rb") as image_file:
+            await update.message.reply_photo(
+                photo=image_file,
+                caption="Динамика score по мышечным группам."
+            )
+
+    except Exception as e:
+        await update.message.reply_text(f"Не смог построить график: {e}")
+
+    finally:
+        if output_path.exists():
+            output_path.unlink()
+
+
+            
+async def score_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rows = db.get_all_workouts()
+
+    if not rows:
+        await update.message.reply_text("В базе пока нет тренировок.")
+        return
+
+    with tempfile.NamedTemporaryFile(
+        suffix=".png",
+        delete=False,
+    ) as tmp_file:
+        output_path = Path(tmp_file.name)
+
+    try:
+        charts.save_latest_score_dashboard(
+            rows=rows,
+            output_path=output_path,
+        )
+
+        with open(output_path, "rb") as image_file:
+            await update.message.reply_photo(
+                photo=image_file,
+                caption="Визуальная сводка последней тренировки."
+            )
+
+    except Exception as e:
+        await update.message.reply_text(f"Не смог построить score chart: {e}")
+
+    finally:
+        if output_path.exists():
+            output_path.unlink()
+# main!
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -316,6 +398,7 @@ def main():
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("volume", volume))
     app.add_handler(CommandHandler("score", score))
+    app.add_handler(CommandHandler("muscle_trend", muscle_trend))
 
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
