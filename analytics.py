@@ -14,13 +14,14 @@ DEFAULT_BODY_WEIGHT_KG = 75.0
 # Later this dictionary should move to DB:
 # exercise_reference_values / exercise_reference_maxes.
 CONFIRMED_REFERENCE_VALUES = {
+    # Keep only values that are genuinely confirmed by prior data or manually accepted.
+    # Weighted exercises not listed here will get provisional references from the current session.
+
     "bench_press": 65.0,
     "deadlift": 110.0,
     "squat": 60.0,
     "romanian_deadlift": 55.0,
     "barbell_row": 60.0,
-    "leg_press": 140.0,
-    "standing_calf_raise": 25.0,
 
     # Bodyweight / reps / static references.
     # For bodyweight exercises this means reference reps, not kilograms.
