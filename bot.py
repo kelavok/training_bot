@@ -1,11 +1,8 @@
 from datetime import date
+
 import re
 from pathlib import Path
 import tempfile
-
-import db
-import analytics
-import charts
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -21,10 +18,17 @@ from config import BOT_TOKEN
 import db
 import analytics
 import charts
+import gemini_parser
 
 
 WAITING_FOR_EXERCISE = "waiting_for_exercise"
 PENDING_ROWS = "pending_rows"
+WAITING_FOR_AI_WORKOUT = "waiting_for_ai_workout"
+
+CALLBACK_ADD_AI_WORKOUT = "add_ai_workout"
+CALLBACK_USE_TEMPLATE_PARSER = "use_template_parser"
+
+
 
 
 TEMPLATE = """
@@ -185,14 +189,13 @@ def format_preview(rows: list[dict]):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        [InlineKeyboardButton("Добавить упражнение", callback_data="add_exercise")]
+        [InlineKeyboardButton("Добавить тренировку", callback_data=CALLBACK_ADD_AI_WORKOUT)]
     ]
 
     await update.message.reply_text(
-        "Бот работает. Можно добавить упражнение.",
+        "Бот работает. Можно добавить тренировку свободным текстом.",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
-
 
 async def dbtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_name = db.test_connection()
@@ -201,42 +204,143 @@ async def dbtest(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data[WAITING_FOR_EXERCISE] = True
+    context.user_data[WAITING_FOR_AI_WORKOUT] = False
+
     await update.message.reply_text(TEMPLATE)
 
+async def ai_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data[WAITING_FOR_AI_WORKOUT] = True
+    context.user_data[WAITING_FOR_EXERCISE] = False
+    context.user_data[PENDING_ROWS] = None
+
+    await update.message.reply_text(
+        "Напиши тренировку свободным текстом. Например:\n\n"
+        "Жим лёжа: 20×15 разминка, 50×10, 60×8, 60×7. "
+        "Потом подтягивания 10, 8, 6. Пресс 3×30."
+    )
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
+    if query.data == CALLBACK_ADD_AI_WORKOUT:
+        context.user_data[WAITING_FOR_AI_WORKOUT] = True
+        context.user_data[WAITING_FOR_EXERCISE] = False
+        context.user_data[PENDING_ROWS] = None
+
+        await query.message.reply_text(
+            "Напиши тренировку свободным текстом. Например:\n\n"
+            "Жим лёжа: 20×15 разминка, 50×10, 60×8, 60×7. "
+            "Потом подтягивания 10, 8, 6. Пресс 3×30."
+        )
+        return
+
     if query.data == "add_exercise":
         context.user_data[WAITING_FOR_EXERCISE] = True
-        await query.message.reply_text(TEMPLATE)
+        context.user_data[WAITING_FOR_AI_WORKOUT] = False
+        context.user_data[PENDING_ROWS] = None
 
-    elif query.data == "confirm_insert":
+        await query.message.reply_text(TEMPLATE)
+        return
+
+    if query.data == CALLBACK_USE_TEMPLATE_PARSER:
+        context.user_data[WAITING_FOR_EXERCISE] = True
+        context.user_data[WAITING_FOR_AI_WORKOUT] = False
+        context.user_data[PENDING_ROWS] = None
+
+        await query.message.reply_text(
+            "Ок, переключаю на старый шаблонный парсер.\n\n"
+            f"{TEMPLATE}"
+        )
+        return
+
+    if query.data == "confirm_insert":
         rows = context.user_data.get(PENDING_ROWS)
 
         if not rows:
             await query.message.reply_text("Нет данных для сохранения.")
             return
 
-        db.insert_workout_rows(rows)
+        try:
+            db.insert_workout_rows(rows)
+
+        except Exception as e:
+            print("INSERT ERROR:", repr(e))
+            print("ROWS:", rows)
+
+            await query.message.reply_text(
+                f"Не смог сохранить в базу: {e}"
+            )
+            return
 
         context.user_data[PENDING_ROWS] = None
         context.user_data[WAITING_FOR_EXERCISE] = False
+        context.user_data[WAITING_FOR_AI_WORKOUT] = False
 
         await query.message.reply_text("Сохранил в базу.")
+        return
 
-    elif query.data == "cancel_insert":
+    if query.data == "cancel_insert":
         context.user_data[PENDING_ROWS] = None
         context.user_data[WAITING_FOR_EXERCISE] = False
+        context.user_data[WAITING_FOR_AI_WORKOUT] = False
 
         await query.message.reply_text("Ок, не сохраняю.")
-
+        return
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.user_data.get(WAITING_FOR_AI_WORKOUT):
+        await update.message.reply_text("Разбираю тренировку через Gemini...")
+
+        try:
+
+            existing_exercises = db.get_existing_exercise_names()
+
+            rows = gemini_parser.parse_workout_with_gemini(
+                
+                text=update.message.text,
+                default_date=date.today(),
+                user_id=1,
+                existing_exercises=existing_exercises,
+            )
+         
+
+            context.user_data[PENDING_ROWS] = rows
+
+            keyboard = [
+                [
+                    InlineKeyboardButton("OK", callback_data="confirm_insert"),
+                    InlineKeyboardButton("Cancel", callback_data="cancel_insert"),
+                ]
+            ]
+
+            await update.message.reply_text(
+                format_preview(rows),
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        except Exception as e:
+            print("GEMINI PARSE ERROR:", repr(e))
+
+            keyboard = [
+                [
+                    InlineKeyboardButton("Use template parser", callback_data=CALLBACK_USE_TEMPLATE_PARSER),
+                    InlineKeyboardButton("Cancel", callback_data="cancel_insert"),
+                ]
+            ]
+
+            await update.message.reply_text(
+                "Не смог разобрать тренировку через Gemini.\n\n"
+                f"Ошибка: {e}\n\n"
+                "Можно отменить или перейти на старый шаблонный ввод.",
+                reply_markup=InlineKeyboardMarkup(keyboard),
+            )
+
+        return
+
     if not context.user_data.get(WAITING_FOR_EXERCISE):
         await update.message.reply_text(
-            "Я пока жду команду. Нажми /start или /add_exercise."
+            "Я пока жду команду. Нажми /start, /ai_add или /add_exercise."
         )
         return
 
@@ -396,6 +500,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("dbtest", dbtest))
     app.add_handler(CommandHandler("add_exercise", add_command))
+    app.add_handler(CommandHandler("ai_add", ai_add_command))
     app.add_handler(CommandHandler("last", last))
     app.add_handler(CommandHandler("stats", stats))
     app.add_handler(CommandHandler("volume", volume))

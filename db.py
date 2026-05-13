@@ -202,3 +202,21 @@ def get_all_workouts():
         rows = result.mappings().all()
 
     return rows
+
+
+def get_existing_exercise_names():
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT DISTINCT exercise
+                FROM workouts
+                WHERE exercise IS NOT NULL
+                ORDER BY exercise
+            """)
+        )
+
+        rows = result.scalars().all()
+
+    return list(rows)
