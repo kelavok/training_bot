@@ -1,9 +1,12 @@
 from sqlalchemy import create_engine, text
 
-from config import DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME
+from config import DATABASE_URL, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME
 
 
 def get_engine():
+    if DATABASE_URL:
+        return create_engine(DATABASE_URL)
+
     return create_engine(
         f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     )
