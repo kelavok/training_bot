@@ -1,12 +1,9 @@
 from sqlalchemy import create_engine, text
 
-from config import DATABASE_URL, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME
+from config import DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME
 
 
 def get_engine():
-    if DATABASE_URL:
-        return create_engine(DATABASE_URL)
-
     return create_engine(
         f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     )
@@ -223,3 +220,320 @@ def get_existing_exercise_names():
         rows = result.scalars().all()
 
     return list(rows)
+
+
+
+def clear_daily_stats():
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        conn.execute(text("DELETE FROM daily_exercise_stats"))
+        conn.execute(text("DELETE FROM daily_muscle_stats"))
+        conn.commit()
+
+
+def insert_daily_exercise_stats(rows: list[dict]):
+    if not rows:
+        return
+
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO daily_exercise_stats
+                (
+                    user_id,
+                    date,
+                    exercise,
+                    exercise_type,
+                    sets,
+                    working_sets,
+                    heavy_sets,
+                    target_sets,
+                    total_reps,
+                    total_duration_sec,
+                    total_volume,
+                    max_weight,
+                    working_weight,
+                    best_estimated_1rm,
+                    avg_intensity,
+                    score_units,
+                    target_units,
+                    rating_10,
+                    algorithmic_effort,
+                    updated_at
+                )
+                VALUES
+                (
+                    :user_id,
+                    :date,
+                    :exercise,
+                    :exercise_type,
+                    :sets,
+                    :working_sets,
+                    :heavy_sets,
+                    :target_sets,
+                    :total_reps,
+                    :total_duration_sec,
+                    :total_volume,
+                    :max_weight,
+                    :working_weight,
+                    :best_estimated_1rm,
+                    :avg_intensity,
+                    :score_units,
+                    :target_units,
+                    :rating_10,
+                    :algorithmic_effort,
+                    now()
+                )
+                ON CONFLICT (user_id, date, exercise)
+                DO UPDATE SET
+                    exercise_type = EXCLUDED.exercise_type,
+                    sets = EXCLUDED.sets,
+                    working_sets = EXCLUDED.working_sets,
+                    heavy_sets = EXCLUDED.heavy_sets,
+                    target_sets = EXCLUDED.target_sets,
+                    total_reps = EXCLUDED.total_reps,
+                    total_duration_sec = EXCLUDED.total_duration_sec,
+                    total_volume = EXCLUDED.total_volume,
+                    max_weight = EXCLUDED.max_weight,
+                    working_weight = EXCLUDED.working_weight,
+                    best_estimated_1rm = EXCLUDED.best_estimated_1rm,
+                    avg_intensity = EXCLUDED.avg_intensity,
+                    score_units = EXCLUDED.score_units,
+                    target_units = EXCLUDED.target_units,
+                    rating_10 = EXCLUDED.rating_10,
+                    algorithmic_effort = EXCLUDED.algorithmic_effort,
+                    updated_at = now()
+            """),
+            rows
+        )
+        conn.commit()
+
+
+def insert_daily_muscle_stats(rows: list[dict]):
+    if not rows:
+        return
+
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO daily_muscle_stats
+                (
+                    user_id,
+                    date,
+                    muscle,
+                    score_units,
+                    target_units,
+                    rating_10,
+                    updated_at
+                )
+                VALUES
+                (
+                    :user_id,
+                    :date,
+                    :muscle,
+                    :score_units,
+                    :target_units,
+                    :rating_10,
+                    now()
+                )
+                ON CONFLICT (user_id, date, muscle)
+                DO UPDATE SET
+                    score_units = EXCLUDED.score_units,
+                    target_units = EXCLUDED.target_units,
+                    rating_10 = EXCLUDED.rating_10,
+                    updated_at = now()
+            """),
+            rows
+        )
+        conn.commit()
+
+
+def get_daily_exercise_stats(exercise: str):
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT
+                    user_id,
+                    date,
+                    exercise,
+                    exercise_type,
+                    sets,
+                    working_sets,
+                    heavy_sets,
+                    target_sets,
+                    total_reps,
+                    total_duration_sec,
+                    total_volume,
+                    max_weight,
+                    working_weight,
+                    best_estimated_1rm,
+                    avg_intensity,
+                    score_units,
+                    target_units,
+                    rating_10,
+                    algorithmic_effort,
+                    updated_at
+                FROM daily_exercise_stats
+                WHERE lower(exercise) = lower(:exercise)
+                ORDER BY date
+            """),
+            {"exercise": exercise}
+        )
+
+        rows = result.mappings().all()
+
+    return rows
+
+
+def get_daily_muscle_stats(muscle: str):
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT
+                    user_id,
+                    date,
+                    muscle,
+                    score_units,
+                    target_units,
+                    rating_10,
+                    updated_at
+                FROM daily_muscle_stats
+                WHERE lower(muscle) = lower(:muscle)
+                ORDER BY date
+            """),
+            {"muscle": muscle}
+        )
+
+        rows = result.mappings().all()
+
+    return rows
+
+def get_exercise_aggregate_history(exercise: str):
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT
+                    user_id,
+                    date,
+                    exercise,
+                    exercise_type,
+                    sets,
+                    working_sets,
+                    heavy_sets,
+                    target_sets,
+                    total_reps,
+                    total_duration_sec,
+                    total_volume,
+                    max_weight,
+                    working_weight,
+                    best_estimated_1rm,
+                    avg_intensity,
+                    score_units,
+                    target_units,
+                    rating_10,
+                    algorithmic_effort,
+                    updated_at
+                FROM daily_exercise_stats
+                WHERE exercise = :exercise
+                ORDER BY date
+            """),
+            {"exercise": exercise}
+        )
+
+        rows = result.mappings().all()
+
+    return rows
+
+
+def get_muscle_aggregate_history(muscle: str):
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT
+                    user_id,
+                    date,
+                    muscle,
+                    score_units,
+                    target_units,
+                    rating_10,
+                    updated_at
+                FROM daily_muscle_stats
+                WHERE muscle = :muscle
+                ORDER BY date
+            """),
+            {"muscle": muscle}
+        )
+
+        rows = result.mappings().all()
+
+    return rows
+
+
+def get_available_exercise_keys():
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT DISTINCT exercise
+                FROM daily_exercise_stats
+                ORDER BY exercise
+            """)
+        )
+
+        rows = result.scalars().all()
+
+    return list(rows)
+
+
+def get_available_muscle_keys():
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT DISTINCT muscle
+                FROM daily_muscle_stats
+                ORDER BY muscle
+            """)
+        )
+
+        rows = result.scalars().all()
+
+    return list(rows)
+
+
+def clear_daily_stats_for_date(training_date):
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        conn.execute(
+            text("""
+                DELETE FROM daily_exercise_stats
+                WHERE date = :training_date
+            """),
+            {"training_date": training_date}
+        )
+
+        conn.execute(
+            text("""
+                DELETE FROM daily_muscle_stats
+                WHERE date = :training_date
+            """),
+            {"training_date": training_date}
+        )
+
+        conn.commit()

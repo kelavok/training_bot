@@ -22,6 +22,7 @@ CONFIRMED_REFERENCE_VALUES = {
     "squat": 60.0,
     "romanian_deadlift": 55.0,
     "barbell_row": 60.0,
+      "back_squat": 60.0,
 
     # Bodyweight / reps / static references.
     # For bodyweight exercises this means reference reps, not kilograms.
@@ -54,6 +55,14 @@ EXERCISE_TYPES = {
     "rear_delt_fly": "weighted",
     "lateral_raises": "weighted",
     "kettlebell_shoulder_press": "weighted",
+    "back_squat": "weighted",
+    "lat_pulldown": "weighted",
+    "one_arm_dumbbell_row": "weighted",
+    "face_pull": "weighted",
+    "hyperextension": "weighted",
+    "dumbbell_lunge": "weighted",
+    "hammer_curl": "weighted",
+    "ez_bar_curl": "weighted",
 
     "pullups": "bodyweight",
     "pull_ups": "bodyweight",
@@ -74,6 +83,25 @@ EXERCISE_TYPES = {
 MUSCLE_MAP = {
     "bench_press": {"chest": 1.0, "triceps": 0.45, "front_delts": 0.35},
     "incline_db_press": {"chest": 0.85, "front_delts": 0.45, "triceps": 0.25},
+    "back_squat": {"quads": 1.0, "glutes": 0.65, "core": 0.25},
+
+    "lat_pulldown": {"back": 1.0, "biceps": 0.35},
+    "one_arm_dumbbell_row": {"back": 1.0, "biceps": 0.30, "rear_delts": 0.20},
+    "face_pull": {"rear_delts": 1.0, "shoulders": 0.45, "back": 0.25},
+    "hyperextension": {
+        "posterior_chain": 0.8,
+        "glutes": 0.45,
+        "hamstrings": 0.45,
+        "back": 0.25,
+    },
+    "dumbbell_lunge": {
+        "quads": 0.8,
+        "glutes": 0.8,
+        "hamstrings": 0.35,
+        "core": 0.20,
+    },
+    "hammer_curl": {"biceps": 1.0, "forearms": 0.35},
+    "ez_bar_curl": {"biceps": 1.0},
 
     "deadlift": {
         "posterior_chain": 1.0,
@@ -135,6 +163,7 @@ TARGET_MUSCLE_UNITS = {
     "obliques": 2.5,
     "hip_flexors": 2.5,
     "calves": 4.5,
+    "forearms": 2.5,
 }
 
 DEFAULT_TARGET_UNITS = 4.0

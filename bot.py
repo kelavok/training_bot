@@ -3,6 +3,7 @@ from datetime import date
 import re
 from pathlib import Path
 import tempfile
+import stats_service
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -273,11 +274,40 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        try:
+            training_dates = {
+                row["date"]
+                for row in rows
+                if row.get("date") is not None
+            }
+
+            rebuild_result = stats_service.rebuild_stats_for_dates(
+                training_dates=training_dates,
+                user_id=1,
+            )
+
+            print("STATS REBUILD RESULT:", rebuild_result)
+
+        except Exception as e:
+            print("STATS REBUILD ERROR:", repr(e))
+
+            await query.message.reply_text(
+                "Тренировку сохранил, но не смог обновить агрегированную статистику. "
+                f"Ошибка: {e}"
+            )
+
+            context.user_data[PENDING_ROWS] = None
+            context.user_data[WAITING_FOR_EXERCISE] = False
+            context.user_data[WAITING_FOR_AI_WORKOUT] = False
+            return
+
         context.user_data[PENDING_ROWS] = None
         context.user_data[WAITING_FOR_EXERCISE] = False
         context.user_data[WAITING_FOR_AI_WORKOUT] = False
 
-        await query.message.reply_text("Сохранил в базу.")
+        await query.message.reply_text(
+            "Сохранил в базу и обновил статистику."
+        )
         return
 
     if query.data == "cancel_insert":
@@ -494,6 +524,86 @@ async def score_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if output_path.exists():
             output_path.unlink()
 # main!
+
+async def exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text(
+            "Укажи упражнение. Например:\n"
+            "/exercise bench_press\n"
+            "/exercise Bench Press"
+        )
+        return
+
+    exercise_input = " ".join(context.args)
+    exercise_key = analytics.normalize_exercise_name(exercise_input)
+
+    rows = db.get_exercise_aggregate_history(exercise_key)
+
+    if not rows:
+        await update.message.reply_text(
+            f"Не нашёл агрегатов по упражнению: {exercise_key}"
+        )
+        return
+
+    latest = rows[-1]
+
+    total_sessions = len(rows)
+    total_sets = sum(row["sets"] or 0 for row in rows)
+    total_reps = sum(row["total_reps"] or 0 for row in rows)
+    total_volume = sum(float(row["total_volume"] or 0) for row in rows)
+    max_weight = max(float(row["max_weight"] or 0) for row in rows)
+
+    working_weights = [
+        float(row["working_weight"])
+        for row in rows
+        if row["working_weight"] is not None
+    ]
+
+    best_working_weight = max(working_weights) if working_weights else None
+
+    best_e1rm_values = [
+        float(row["best_estimated_1rm"])
+        for row in rows
+        if row["best_estimated_1rm"] is not None
+    ]
+
+    best_e1rm = max(best_e1rm_values) if best_e1rm_values else None
+
+    avg_rating = sum(float(row["rating_10"] or 0) for row in rows) / total_sessions
+
+    text = [
+        f"Статистика по упражнению: {exercise_key}",
+        "",
+        f"Тренировочных дней: {total_sessions}",
+        f"Последняя дата: {latest['date']}",
+        f"Всего подходов: {total_sets}",
+        f"Всего повторений: {total_reps}",
+        f"Общий объём: {total_volume:.1f} кг",
+        f"Максимальный вес: {max_weight:.1f} кг",
+    ]
+
+    if best_working_weight is not None:
+        text.append(f"Лучший рабочий вес: {best_working_weight:.1f} кг")
+
+    if best_e1rm is not None:
+        text.append(f"Лучший e1RM: {best_e1rm:.1f} кг")
+
+    text.extend(
+        [
+            f"Последний score: {float(latest['rating_10'] or 0):.1f}/10",
+            f"Средний score: {avg_rating:.1f}/10",
+        ]
+    )
+
+    if latest["exercise_type"] in {"reps_based", "bodyweight"}:
+        text.append(f"Последние повторы за день: {latest['total_reps']}")
+
+    if latest["exercise_type"] == "static":
+        text.append(f"Последняя длительность: {latest['total_duration_sec']} сек.")
+
+    await update.message.reply_text("\n".join(text))
+
+
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -506,7 +616,9 @@ def main():
     app.add_handler(CommandHandler("volume", volume))
     app.add_handler(CommandHandler("score", score))
     app.add_handler(CommandHandler("muscle_trend", muscle_trend))
+    
     app.add_handler(CommandHandler("score_chart", score_chart))
+    app.add_handler(CommandHandler("exercise", exercise))
 
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
