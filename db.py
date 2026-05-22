@@ -3,6 +3,10 @@ from sqlalchemy import create_engine, text
 from config import DATABASE_URL, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME
 
 
+DEFAULT_REST_SEC_AFTER = 120
+DEFAULT_RPE = 6
+
+
 def get_engine():
     if DATABASE_URL:
         return create_engine(DATABASE_URL)
@@ -22,8 +26,28 @@ def test_connection():
     return db_name
 
 
+def normalize_workout_row_defaults(row: dict) -> dict:
+    normalized_row = dict(row)
+
+    rest_sec_after = normalized_row.get("rest_sec_after")
+    rpe = normalized_row.get("rpe")
+
+    if rest_sec_after is None or rest_sec_after <= 0:
+        normalized_row["rest_sec_after"] = DEFAULT_REST_SEC_AFTER
+
+    if rpe is None or rpe <= 0:
+        normalized_row["rpe"] = DEFAULT_RPE
+
+    return normalized_row
+
+
+def normalize_workout_rows_defaults(rows: list[dict]) -> list[dict]:
+    return [normalize_workout_row_defaults(row) for row in rows]
+
+
 def insert_workout_rows(rows: list[dict]):
     engine = get_engine()
+    rows = normalize_workout_rows_defaults(rows)
 
     with engine.connect() as conn:
         conn.execute(
