@@ -113,6 +113,35 @@ def get_last_workouts(limit: int = 10):
 
     return rows
 
+
+def get_latest_training_dates(limit: int = 10, user_id: int = 1):
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT
+                    date,
+                    COUNT(*) AS rows_count,
+                    COUNT(DISTINCT exercise) AS exercises_count,
+                    COALESCE(SUM(reps * weight_kg), 0) AS total_volume
+                FROM workouts
+                WHERE user_id = :user_id
+                GROUP BY date
+                ORDER BY date DESC
+                LIMIT :limit
+            """),
+            {
+                "user_id": user_id,
+                "limit": limit,
+            }
+        )
+
+        rows = result.mappings().all()
+
+    return rows
+
+
 def get_basic_stats():
     engine = get_engine()
 

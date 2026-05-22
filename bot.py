@@ -32,6 +32,7 @@ WAITING_FOR_AI_WORKOUT = "waiting_for_ai_workout"
 
 CALLBACK_ADD_AI_WORKOUT = "add_ai_workout"
 CALLBACK_USE_TEMPLATE_PARSER = "use_template_parser"
+CALLBACK_LAST_DATE_PREFIX = "last_date:"
 
 
 COMMANDS_HELP = """
@@ -41,7 +42,7 @@ COMMANDS_HELP = """
 /start - главное меню
 /ai_add - добавить тренировку свободным текстом через AI parser
 /add_exercise - старый шаблонный ввод
-/last - последние сырые записи
+/last - последние 10 тренировочных дат, клик открывает все строки за день
 
 Текстовая статистика:
 /stats [7d|30d|90d|all|YYYY-MM] - обзор периода
@@ -238,6 +239,92 @@ def format_preview(rows: list[dict]):
     return "\n".join(lines)
 
 
+def format_workouts_for_date(training_date, rows: list[dict]) -> str:
+    if not rows:
+        return f"Нет строк workouts за дату {training_date}."
+
+    total_volume = sum(
+        analytics.to_float(row.get("reps")) * analytics.to_float(row.get("weight_kg"))
+        for row in rows
+    )
+    exercises_count = len({
+        analytics.normalize_exercise_name(row.get("exercise"))
+        for row in rows
+        if row.get("exercise")
+    })
+
+    lines = [
+        f"Тренировка за {training_date}",
+        "",
+        f"Строк/подходов: {len(rows)}",
+        f"Упражнений: {exercises_count}",
+        f"Volume: {total_volume:.1f} kg",
+        "",
+    ]
+
+    current_exercise = None
+
+    for index, row in enumerate(rows, start=1):
+        exercise = row.get("exercise") or "unknown"
+
+        if exercise != current_exercise:
+            current_exercise = exercise
+            lines.append(f"{exercise}")
+
+        reps = row.get("reps")
+        weight = row.get("weight_kg")
+        duration = row.get("duration_sec")
+        rest = row.get("rest_sec_after")
+        rpe = row.get("rpe")
+        notes = row.get("notes")
+
+        detail_parts = [f"#{row['id']}", f"{reps} reps"]
+
+        if weight is not None:
+            detail_parts.append(f"{analytics.to_float(weight):.1f} kg")
+
+        if duration is not None and analytics.to_int(duration) > 0:
+            detail_parts.append(f"{duration} sec")
+
+        if rest is not None:
+            detail_parts.append(f"rest {rest}s")
+
+        if rpe is not None:
+            detail_parts.append(f"rpe {rpe}")
+
+        if notes:
+            detail_parts.append(f"notes: {notes}")
+
+        lines.append(f"{index}. " + " | ".join(detail_parts))
+
+    return "\n".join(lines)
+
+
+def split_telegram_text(text: str, limit: int = 3900) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+
+    chunks = []
+    current_lines = []
+    current_length = 0
+
+    for line in text.splitlines():
+        line_length = len(line) + 1
+
+        if current_lines and current_length + line_length > limit:
+            chunks.append("\n".join(current_lines))
+            current_lines = []
+            current_length = 0
+
+        current_lines.append(line)
+        current_length += line_length
+
+    if current_lines:
+        chunks.append("\n".join(current_lines))
+
+    return chunks
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("Добавить тренировку", callback_data=CALLBACK_ADD_AI_WORKOUT)]
@@ -273,6 +360,20 @@ async def ai_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
+    if query.data.startswith(CALLBACK_LAST_DATE_PREFIX):
+        date_value = query.data.removeprefix(CALLBACK_LAST_DATE_PREFIX)
+
+        try:
+            training_date = date.fromisoformat(date_value)
+        except ValueError:
+            await query.message.reply_text(f"Некорректная дата: {date_value}")
+            return
+
+        rows = db.get_workouts_by_date(training_date)
+        for chunk in split_telegram_text(format_workouts_for_date(training_date, rows)):
+            await query.message.reply_text(chunk)
+        return
 
     if query.data == CALLBACK_ADD_AI_WORKOUT:
         context.user_data[WAITING_FOR_AI_WORKOUT] = True
@@ -1077,6 +1178,43 @@ async def last(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     await update.message.reply_text("\n".join(lines))
+
+
+async def last(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    rows = db.get_latest_training_dates(limit=10, user_id=1)
+
+    if not rows:
+        await update.message.reply_text("В базе пока нет тренировок.")
+        return
+
+    lines = [
+        "Последние тренировочные даты.",
+        "Нажми дату, чтобы открыть все строки workouts за день:",
+        "",
+    ]
+    keyboard = []
+
+    for row in rows:
+        training_date = row["date"]
+        lines.append(
+            f"{training_date} | "
+            f"строк: {row['rows_count']} | "
+            f"упражнений: {row['exercises_count']} | "
+            f"volume: {analytics.to_float(row['total_volume']):.1f} kg"
+        )
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    str(training_date),
+                    callback_data=f"{CALLBACK_LAST_DATE_PREFIX}{training_date}",
+                )
+            ]
+        )
+
+    await update.message.reply_text(
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
 
 
 
