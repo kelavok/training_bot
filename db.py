@@ -135,6 +135,41 @@ def get_basic_stats():
 
     return row
 
+
+def get_basic_stats_for_period(
+    user_id: int = 1,
+    start_date=None,
+    end_date=None,
+):
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT
+                    COUNT(*) AS total_sets,
+                    COUNT(DISTINCT date) AS training_days,
+                    COUNT(DISTINCT exercise) AS unique_exercises,
+                    COALESCE(SUM(reps), 0) AS total_reps,
+                    COALESCE(SUM(reps * weight_kg), 0) AS total_volume,
+                    MIN(date) AS first_date,
+                    MAX(date) AS last_date
+                FROM workouts
+                WHERE user_id = :user_id
+                  AND (:start_date IS NULL OR date >= :start_date)
+                  AND (:end_date IS NULL OR date <= :end_date)
+            """),
+            {
+                "user_id": user_id,
+                "start_date": start_date,
+                "end_date": end_date,
+            }
+        )
+
+        row = result.mappings().one()
+
+    return row
+
 def get_volume_by_date():
     engine = get_engine()
 
@@ -242,6 +277,158 @@ def get_existing_exercise_names():
                 WHERE exercise IS NOT NULL
                 ORDER BY exercise
             """)
+        )
+
+        rows = result.scalars().all()
+
+    return list(rows)
+
+
+def create_exercise_reference_values_table():
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        conn.execute(
+            text("""
+                CREATE TABLE IF NOT EXISTS exercise_reference_values (
+                    user_id integer NOT NULL,
+                    exercise text NOT NULL,
+                    exercise_type text NOT NULL,
+                    reference_value numeric(8,2) NOT NULL,
+                    reference_source text NOT NULL,
+                    best_e1rm numeric(8,2),
+                    best_working_weight numeric(8,2),
+                    best_volume_day numeric(10,2),
+                    best_reps_per_set numeric(8,2),
+                    best_duration_sec integer,
+                    sample_sessions integer NOT NULL DEFAULT 0,
+                    updated_at timestamp NOT NULL DEFAULT now(),
+                    PRIMARY KEY (user_id, exercise)
+                )
+            """)
+        )
+        conn.commit()
+
+
+def clear_exercise_reference_values(user_id: int | None = None):
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        if user_id is None:
+            conn.execute(text("DELETE FROM exercise_reference_values"))
+        else:
+            conn.execute(
+                text("""
+                    DELETE FROM exercise_reference_values
+                    WHERE user_id = :user_id
+                """),
+                {"user_id": user_id}
+            )
+
+        conn.commit()
+
+
+def insert_exercise_reference_values(rows: list[dict]):
+    if not rows:
+        return
+
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        conn.execute(
+            text("""
+                INSERT INTO exercise_reference_values
+                (
+                    user_id,
+                    exercise,
+                    exercise_type,
+                    reference_value,
+                    reference_source,
+                    best_e1rm,
+                    best_working_weight,
+                    best_volume_day,
+                    best_reps_per_set,
+                    best_duration_sec,
+                    sample_sessions,
+                    updated_at
+                )
+                VALUES
+                (
+                    :user_id,
+                    :exercise,
+                    :exercise_type,
+                    :reference_value,
+                    :reference_source,
+                    :best_e1rm,
+                    :best_working_weight,
+                    :best_volume_day,
+                    :best_reps_per_set,
+                    :best_duration_sec,
+                    :sample_sessions,
+                    now()
+                )
+                ON CONFLICT (user_id, exercise)
+                DO UPDATE SET
+                    exercise_type = EXCLUDED.exercise_type,
+                    reference_value = EXCLUDED.reference_value,
+                    reference_source = EXCLUDED.reference_source,
+                    best_e1rm = EXCLUDED.best_e1rm,
+                    best_working_weight = EXCLUDED.best_working_weight,
+                    best_volume_day = EXCLUDED.best_volume_day,
+                    best_reps_per_set = EXCLUDED.best_reps_per_set,
+                    best_duration_sec = EXCLUDED.best_duration_sec,
+                    sample_sessions = EXCLUDED.sample_sessions,
+                    updated_at = now()
+            """),
+            rows
+        )
+        conn.commit()
+
+
+def get_exercise_reference_values(user_id: int = 1) -> dict:
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT
+                    user_id,
+                    exercise,
+                    exercise_type,
+                    reference_value,
+                    reference_source,
+                    best_e1rm,
+                    best_working_weight,
+                    best_volume_day,
+                    best_reps_per_set,
+                    best_duration_sec,
+                    sample_sessions,
+                    updated_at
+                FROM exercise_reference_values
+                WHERE user_id = :user_id
+                ORDER BY exercise
+            """),
+            {"user_id": user_id}
+        )
+
+        rows = result.mappings().all()
+
+    return {row["exercise"]: dict(row) for row in rows}
+
+
+def get_workout_exercise_keys(user_id: int = 1) -> list[str]:
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT DISTINCT exercise
+                FROM workouts
+                WHERE user_id = :user_id
+                  AND exercise IS NOT NULL
+                ORDER BY exercise
+            """),
+            {"user_id": user_id}
         )
 
         rows = result.scalars().all()
@@ -483,6 +670,58 @@ def get_exercise_aggregate_history(exercise: str):
     return rows
 
 
+def get_exercise_stats_for_period(
+    user_id: int = 1,
+    start_date=None,
+    end_date=None,
+    exercise: str | None = None,
+):
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT
+                    user_id,
+                    date,
+                    exercise,
+                    exercise_type,
+                    sets,
+                    working_sets,
+                    heavy_sets,
+                    target_sets,
+                    total_reps,
+                    total_duration_sec,
+                    total_volume,
+                    max_weight,
+                    working_weight,
+                    best_estimated_1rm,
+                    avg_intensity,
+                    score_units,
+                    target_units,
+                    rating_10,
+                    algorithmic_effort,
+                    updated_at
+                FROM daily_exercise_stats
+                WHERE user_id = :user_id
+                  AND (:start_date IS NULL OR date >= :start_date)
+                  AND (:end_date IS NULL OR date <= :end_date)
+                  AND (:exercise IS NULL OR exercise = :exercise)
+                ORDER BY date, exercise
+            """),
+            {
+                "user_id": user_id,
+                "start_date": start_date,
+                "end_date": end_date,
+                "exercise": exercise,
+            }
+        )
+
+        rows = result.mappings().all()
+
+    return rows
+
+
 def get_muscle_aggregate_history(muscle: str):
     engine = get_engine()
 
@@ -502,6 +741,45 @@ def get_muscle_aggregate_history(muscle: str):
                 ORDER BY date
             """),
             {"muscle": muscle}
+        )
+
+        rows = result.mappings().all()
+
+    return rows
+
+
+def get_muscle_stats_for_period(
+    user_id: int = 1,
+    start_date=None,
+    end_date=None,
+    muscle: str | None = None,
+):
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            text("""
+                SELECT
+                    user_id,
+                    date,
+                    muscle,
+                    score_units,
+                    target_units,
+                    rating_10,
+                    updated_at
+                FROM daily_muscle_stats
+                WHERE user_id = :user_id
+                  AND (:start_date IS NULL OR date >= :start_date)
+                  AND (:end_date IS NULL OR date <= :end_date)
+                  AND (:muscle IS NULL OR muscle = :muscle)
+                ORDER BY date, muscle
+            """),
+            {
+                "user_id": user_id,
+                "start_date": start_date,
+                "end_date": end_date,
+                "muscle": muscle,
+            }
         )
 
         rows = result.mappings().all()

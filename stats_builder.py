@@ -31,6 +31,7 @@ def calculate_total_duration_for_exercise(rows_for_exercise: list[dict]) -> int:
 def build_daily_stats_from_workouts(
     workout_rows: list[dict],
     user_id: int = 1,
+    reference_values: dict | None = None,
 ) -> tuple[list[dict], list[dict]]:
     rows_by_date = group_rows_by_date(workout_rows)
 
@@ -38,7 +39,10 @@ def build_daily_stats_from_workouts(
     daily_muscle_stats = []
 
     for training_date, rows_for_date in rows_by_date.items():
-        result = analytics.calculate_session_scores(rows_for_date)
+        result = analytics.calculate_session_scores(
+            rows_for_date,
+            reference_values=reference_values,
+        )
 
         rows_by_normalized_exercise = defaultdict(list)
 

@@ -3,7 +3,11 @@ from datetime import date
 import re
 from pathlib import Path
 import tempfile
+import reference_service
 import stats_service
+import stats_formatter
+import stats_charts
+import stats_view_service
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -28,6 +32,52 @@ WAITING_FOR_AI_WORKOUT = "waiting_for_ai_workout"
 
 CALLBACK_ADD_AI_WORKOUT = "add_ai_workout"
 CALLBACK_USE_TEMPLATE_PARSER = "use_template_parser"
+
+
+COMMANDS_HELP = """
+Команды бота:
+
+Добавление тренировок:
+/start - главное меню
+/ai_add - добавить тренировку свободным текстом через AI parser
+/add_exercise - старый шаблонный ввод
+/last - последние сырые записи
+
+Текстовая статистика:
+/stats [7d|30d|90d|all|YYYY-MM] - обзор периода
+/top exercises [metric] [period] [limit] - топ упражнений
+/top muscles [metric] [period] [limit] - топ мышц
+/exercise bench_press [period] - статистика упражнения
+/muscle chest [period] - статистика мышечной группы
+/score - score последней тренировки
+/volume - volume по последним дням
+
+Графики:
+/score_chart - dashboard последней тренировки
+/score_chart [7d|30d|90d|all|YYYY-MM] - dashboard периода
+/stats_chart [period] - dashboard периода
+/top_chart exercises [metric] [period] [limit] - график топа упражнений
+/top_chart muscles [metric] [period] [limit] - график топа мышц
+/exercise_chart bench_press [period] - график прогресса упражнения
+/muscle_chart chest [period] - график мышцы
+/muscle_trend [period] - тренд топ мышц
+
+Периоды:
+7d, 30d, 90d, all, YYYY-MM. По умолчанию обычно 30d.
+
+Метрики для exercise top:
+score_units, total_volume, avg_rating, best_e1rm, best_working_weight, sets, working_sets, heavy_sets
+
+Метрики для muscle top:
+score_units, avg_rating, best_rating
+
+Примеры:
+/stats 30d
+/top exercises best_e1rm all 10
+/top_chart muscles score_units 90d
+/exercise_chart bench_press 90d
+/muscle_chart chest 30d
+""".strip()
 
 
 
@@ -280,6 +330,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for row in rows
                 if row.get("date") is not None
             }
+            exercise_keys = {
+                analytics.normalize_exercise_name(row.get("exercise"))
+                for row in rows
+                if row.get("exercise") is not None
+            }
+
+            references_count = reference_service.rebuild_references_for_exercises(
+                exercise_keys=exercise_keys,
+                user_id=1,
+            )
+
+            print("REFERENCE REBUILD RESULT:", references_count)
 
             rebuild_result = stats_service.rebuild_stats_for_dates(
                 training_dates=training_dates,
@@ -442,7 +504,11 @@ async def score(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Не нашёл строк для последней даты тренировки.")
         return
 
-    result = analytics.calculate_session_scores(rows)
+    reference_values = reference_service.get_reference_values(user_id=1)
+    result = analytics.calculate_session_scores(
+        rows,
+        reference_values=reference_values,
+    )
     report = analytics.format_session_score_report(result)
 
     await update.message.reply_text(report)
@@ -475,6 +541,7 @@ async def muscle_trend(update: Update, context: ContextTypes.DEFAULT_TYPE):
             rows=rows,
             output_path=output_path,
             top_n=8,
+            reference_values=reference_service.get_reference_values(user_id=1),
         )
 
         with open(output_path, "rb") as image_file:
@@ -509,6 +576,7 @@ async def score_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         charts.save_latest_score_dashboard(
             rows=rows,
             output_path=output_path,
+            reference_values=reference_service.get_reference_values(user_id=1),
         )
 
         with open(output_path, "rb") as image_file:
@@ -523,9 +591,258 @@ async def score_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
     finally:
         if output_path.exists():
             output_path.unlink()
+# New chart handlers override the older chart handlers above.
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(COMMANDS_HELP)
+
+
+def parse_top_chart_args(args: list[str]) -> tuple[str | None, str, str, int]:
+    if not args:
+        return None, "score_units", "30d", 10
+
+    target = args[0].lower()
+    metric = "score_units"
+    period_token = "30d"
+    limit = 10
+
+    for arg in args[1:]:
+        if arg.isdigit():
+            limit = min(max(int(arg), 1), 20)
+        elif stats_view_service.is_period_token(arg):
+            period_token = arg
+        else:
+            metric = arg
+
+    return target, metric, period_token, limit
+
+
+async def send_chart(update: Update, output_path: Path, caption: str):
+    with open(output_path, "rb") as image_file:
+        await update.message.reply_photo(
+            photo=image_file,
+            caption=caption,
+        )
+
+
+async def muscle_trend(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    period_token = context.args[0] if context.args else "90d"
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+        output_path = Path(tmp_file.name)
+
+    try:
+        stats_charts.save_muscle_trend_chart_from_aggregates(
+            period_token=period_token,
+            output_path=output_path,
+            top_n=8,
+            user_id=1,
+        )
+        await send_chart(
+            update=update,
+            output_path=output_path,
+            caption=f"Muscle trend: {period_token}",
+        )
+
+    except Exception as e:
+        await update.message.reply_text(f"Не смог построить график: {e}")
+
+    finally:
+        if output_path.exists():
+            output_path.unlink()
+
+
+async def score_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    period_token = context.args[0] if context.args else "latest"
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+        output_path = Path(tmp_file.name)
+
+    try:
+        if period_token == "latest":
+            rows = db.get_all_workouts()
+
+            if not rows:
+                await update.message.reply_text("В базе пока нет тренировок.")
+                return
+
+            charts.save_latest_score_dashboard(
+                rows=rows,
+                output_path=output_path,
+                reference_values=reference_service.get_reference_values(user_id=1),
+            )
+            caption = "Визуальная сводка по последней тренировке."
+        else:
+            stats_charts.save_period_dashboard(
+                period_token=period_token,
+                output_path=output_path,
+                user_id=1,
+            )
+            caption = f"Визуальная сводка за период: {period_token}"
+
+        await send_chart(
+            update=update,
+            output_path=output_path,
+            caption=caption,
+        )
+
+    except Exception as e:
+        await update.message.reply_text(f"Не смог построить score chart: {e}")
+
+    finally:
+        if output_path.exists():
+            output_path.unlink()
+
+
+async def stats_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    period_token = context.args[0] if context.args else "30d"
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+        output_path = Path(tmp_file.name)
+
+    try:
+        stats_charts.save_period_dashboard(
+            period_token=period_token,
+            output_path=output_path,
+            user_id=1,
+        )
+        await send_chart(
+            update=update,
+            output_path=output_path,
+            caption=f"Dashboard за период: {period_token}",
+        )
+
+    except Exception as e:
+        await update.message.reply_text(f"Не смог построить dashboard: {e}")
+
+    finally:
+        if output_path.exists():
+            output_path.unlink()
+
+
+async def top_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    target, metric, period_token, limit = parse_top_chart_args(context.args)
+
+    if target is None or target in {"help", "?", "помощь"}:
+        await update.message.reply_text(COMMANDS_HELP)
+        return
+
+    if target not in {"exercise", "exercises", "muscle", "muscles"}:
+        await update.message.reply_text(
+            "Используй /top_chart exercises ... или /top_chart muscles ..."
+        )
+        return
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+        output_path = Path(tmp_file.name)
+
+    try:
+        stats_charts.save_top_chart(
+            target=target,
+            metric=metric,
+            period_token=period_token,
+            limit=limit,
+            output_path=output_path,
+            user_id=1,
+        )
+        await send_chart(
+            update=update,
+            output_path=output_path,
+            caption=f"Top chart: {target}, {metric}, {period_token}",
+        )
+
+    except Exception as e:
+        await update.message.reply_text(f"Не смог построить top chart: {e}")
+
+    finally:
+        if output_path.exists():
+            output_path.unlink()
+
+
+async def exercise_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text(
+            "Укажи упражнение. Например: /exercise_chart bench_press 90d"
+        )
+        return
+
+    exercise_args, period_token = stats_view_service.split_period_arg(context.args)
+
+    if not exercise_args:
+        await update.message.reply_text(
+            "Укажи упражнение перед периодом. Например: /exercise_chart bench_press 90d"
+        )
+        return
+
+    exercise_input = " ".join(exercise_args)
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+        output_path = Path(tmp_file.name)
+
+    try:
+        stats_charts.save_exercise_chart(
+            exercise_input=exercise_input,
+            period_token=period_token,
+            output_path=output_path,
+            user_id=1,
+        )
+        await send_chart(
+            update=update,
+            output_path=output_path,
+            caption=f"Exercise chart: {exercise_input}, {period_token}",
+        )
+
+    except Exception as e:
+        await update.message.reply_text(f"Не смог построить exercise chart: {e}")
+
+    finally:
+        if output_path.exists():
+            output_path.unlink()
+
+
+async def muscle_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text(
+            "Укажи мышцу. Например: /muscle_chart chest 90d"
+        )
+        return
+
+    muscle_args, period_token = stats_view_service.split_period_arg(context.args)
+
+    if not muscle_args:
+        await update.message.reply_text(
+            "Укажи мышцу перед периодом. Например: /muscle_chart chest 90d"
+        )
+        return
+
+    muscle_input = " ".join(muscle_args)
+
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+        output_path = Path(tmp_file.name)
+
+    try:
+        stats_charts.save_muscle_chart(
+            muscle_input=muscle_input,
+            period_token=period_token,
+            output_path=output_path,
+            user_id=1,
+        )
+        await send_chart(
+            update=update,
+            output_path=output_path,
+            caption=f"Muscle chart: {muscle_input}, {period_token}",
+        )
+
+    except Exception as e:
+        await update.message.reply_text(f"Не смог построить muscle chart: {e}")
+
+    finally:
+        if output_path.exists():
+            output_path.unlink()
+
+
 # main!
 
-async def exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def legacy_exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
             "Укажи упражнение. Например:\n"
@@ -604,21 +921,137 @@ async def exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("\n".join(text))
 
 
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if context.args and context.args[0].lower() in {"help", "?", "помощь"}:
+        await update.message.reply_text(stats_formatter.format_stats_help())
+        return
+
+    period_token = context.args[0] if context.args else "30d"
+    data = stats_view_service.build_overview(period_token=period_token, user_id=1)
+
+    await update.message.reply_text(stats_formatter.format_overview(data))
+
+
+async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args or context.args[0].lower() in {"help", "?", "помощь"}:
+        await update.message.reply_text(stats_formatter.format_stats_help())
+        return
+
+    target = context.args[0].lower()
+    metric = "score_units"
+    period_token = "30d"
+    limit = 10
+
+    for arg in context.args[1:]:
+        if arg.isdigit():
+            limit = min(max(int(arg), 1), 20)
+        elif stats_view_service.is_period_token(arg):
+            period_token = arg
+        else:
+            metric = arg
+
+    if target in {"exercise", "exercises", "упражнения"}:
+        data = stats_view_service.build_top_exercises(
+            period_token=period_token,
+            metric=metric,
+            limit=limit,
+            user_id=1,
+        )
+        await update.message.reply_text(stats_formatter.format_top_exercises(data))
+        return
+
+    if target in {"muscle", "muscles", "мышцы"}:
+        data = stats_view_service.build_top_muscles(
+            period_token=period_token,
+            metric=metric,
+            limit=limit,
+            user_id=1,
+        )
+        await update.message.reply_text(stats_formatter.format_top_muscles(data))
+        return
+
+    await update.message.reply_text(
+        "Не понял тип топа. Используй /top exercises ... или /top muscles ..."
+    )
+
+
+async def exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text(
+            "Укажи упражнение. Например:\n"
+            "/exercise bench_press\n"
+            "/exercise bench_press 90d"
+        )
+        return
+
+    exercise_args, period_token = stats_view_service.split_period_arg(context.args)
+
+    if not exercise_args:
+        await update.message.reply_text(
+            "Укажи упражнение перед периодом. Например: /exercise bench_press 90d"
+        )
+        return
+
+    exercise_input = " ".join(exercise_args)
+    data = stats_view_service.build_exercise_detail(
+        exercise_input=exercise_input,
+        period_token=period_token,
+        user_id=1,
+    )
+
+    await update.message.reply_text(stats_formatter.format_exercise_detail(data))
+
+
+async def muscle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text(
+            "Укажи мышцу. Например:\n"
+            "/muscle chest\n"
+            "/muscle back 90d"
+        )
+        return
+
+    muscle_args, period_token = stats_view_service.split_period_arg(context.args)
+
+    if not muscle_args:
+        await update.message.reply_text(
+            "Укажи мышцу перед периодом. Например: /muscle chest 30d"
+        )
+        return
+
+    muscle_input = " ".join(muscle_args)
+    data = stats_view_service.build_muscle_detail(
+        muscle_input=muscle_input,
+        period_token=period_token,
+        user_id=1,
+    )
+
+    await update.message.reply_text(stats_formatter.format_muscle_detail(data))
+
+
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("commands", help_command))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("dbtest", dbtest))
     app.add_handler(CommandHandler("add_exercise", add_command))
     app.add_handler(CommandHandler("ai_add", ai_add_command))
     app.add_handler(CommandHandler("last", last))
     app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("top", top))
     app.add_handler(CommandHandler("volume", volume))
     app.add_handler(CommandHandler("score", score))
     app.add_handler(CommandHandler("muscle_trend", muscle_trend))
     
     app.add_handler(CommandHandler("score_chart", score_chart))
+    app.add_handler(CommandHandler("stats_chart", stats_chart))
+    app.add_handler(CommandHandler("top_chart", top_chart))
+    app.add_handler(CommandHandler("exercise_chart", exercise_chart))
+    app.add_handler(CommandHandler("muscle_chart", muscle_chart))
     app.add_handler(CommandHandler("exercise", exercise))
+    app.add_handler(CommandHandler("muscle", muscle))
 
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))

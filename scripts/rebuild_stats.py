@@ -5,6 +5,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(PROJECT_ROOT))
 
 import db
+import reference_service
 import stats_builder
 
 
@@ -18,10 +19,15 @@ def main():
 
     print(f"Loaded workout rows: {len(workout_rows)}")
 
+    print("Loading reference values...")
+    reference_values = reference_service.get_reference_values(user_id=1)
+    print(f"Loaded reference values: {len(reference_values)}")
+
     print("Building daily stats...")
     daily_exercise_stats, daily_muscle_stats = stats_builder.build_daily_stats_from_workouts(
         workout_rows=workout_rows,
         user_id=1,
+        reference_values=reference_values,
     )
 
     print(f"Daily exercise stat rows: {len(daily_exercise_stats)}")

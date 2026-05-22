@@ -308,7 +308,18 @@ def get_reference_value(
     exercise: str,
     exercise_type: str,
     rows_for_exercise: list[dict],
+    reference_values: dict | None = None,
 ) -> tuple[float, str]:
+    if reference_values:
+        reference_row = reference_values.get(exercise)
+
+        if reference_row:
+            reference_value = to_float(reference_row.get("reference_value"))
+
+            if reference_value > 0:
+                reference_source = reference_row.get("reference_source") or "db_reference"
+                return reference_value, reference_source
+
     if exercise in CONFIRMED_REFERENCE_VALUES:
         return CONFIRMED_REFERENCE_VALUES[exercise], "confirmed_manual"
 
@@ -530,7 +541,7 @@ def get_exercise_target_units(exercise_type: str, sets_count: int) -> float:
     return max(3.0, sets_count * 0.90)
 
 
-def calculate_session_scores(rows: list[dict]) -> dict:
+def calculate_session_scores(rows: list[dict], reference_values: dict | None = None) -> dict:
     if not rows:
         return {
             "date": None,
@@ -554,6 +565,7 @@ def calculate_session_scores(rows: list[dict]) -> dict:
             exercise=exercise,
             exercise_type=exercise_type,
             rows_for_exercise=exercise_rows,
+            reference_values=reference_values,
         )
 
         weighted_values = [

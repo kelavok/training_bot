@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import db
+import reference_service
 import stats_builder
 
 
@@ -12,9 +13,12 @@ def rebuild_stats_for_date(training_date, user_id: int = 1) -> tuple[int, int]:
     if not workout_rows:
         return 0, 0
 
+    reference_values = reference_service.get_reference_values(user_id=user_id)
+
     daily_exercise_stats, daily_muscle_stats = stats_builder.build_daily_stats_from_workouts(
         workout_rows=workout_rows,
         user_id=user_id,
+        reference_values=reference_values,
     )
 
     db.insert_daily_exercise_stats(daily_exercise_stats)

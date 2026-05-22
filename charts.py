@@ -18,7 +18,11 @@ def group_rows_by_date(rows: list[dict]) -> dict:
     return dict(rows_by_date)
 
 
-def build_muscle_trend_data(rows: list[dict], top_n: int = 8) -> tuple[list, list[str], dict]:
+def build_muscle_trend_data(
+    rows: list[dict],
+    top_n: int = 8,
+    reference_values: dict | None = None,
+) -> tuple[list, list[str], dict]:
     rows_by_date = group_rows_by_date(rows)
 
     dates = sorted(rows_by_date.keys())
@@ -33,7 +37,10 @@ def build_muscle_trend_data(rows: list[dict], top_n: int = 8) -> tuple[list, lis
     MIN_ACTUAL_MUSCLE_SHARE_OF_TARGET = 0.2
 
     for training_date in dates:
-        result = analytics.calculate_session_scores(rows_by_date[training_date])
+        result = analytics.calculate_session_scores(
+            rows_by_date[training_date],
+            reference_values=reference_values,
+        )
 
         muscle_scores = {}
 
@@ -73,12 +80,14 @@ def save_muscle_trend_chart(
     rows: list[dict],
     output_path: str | Path,
     top_n: int = 8,
+    reference_values: dict | None = None,
 ) -> Path:
     output_path = Path(output_path)
 
     dates, selected_muscles, daily_scores = build_muscle_trend_data(
         rows=rows,
         top_n=top_n,
+        reference_values=reference_values,
     )
 
     if not dates or not selected_muscles:
@@ -144,14 +153,20 @@ def save_muscle_trend_chart(
     return output_path
 
 
-def build_session_score_history(rows: list[dict]) -> list[dict]:
+def build_session_score_history(
+    rows: list[dict],
+    reference_values: dict | None = None,
+) -> list[dict]:
     rows_by_date = group_rows_by_date(rows)
     dates = sorted(rows_by_date.keys())
 
     history = []
 
     for training_date in dates:
-        result = analytics.calculate_session_scores(rows_by_date[training_date])
+        result = analytics.calculate_session_scores(
+            rows_by_date[training_date],
+            reference_values=reference_values,
+        )
 
         history.append(
             {
@@ -167,10 +182,14 @@ def build_session_score_history(rows: list[dict]) -> list[dict]:
 def save_latest_score_dashboard(
     rows: list[dict],
     output_path: str | Path,
+    reference_values: dict | None = None,
 ) -> Path:
     output_path = Path(output_path)
 
-    history = build_session_score_history(rows)
+    history = build_session_score_history(
+        rows,
+        reference_values=reference_values,
+    )
 
     if not history:
         raise ValueError("Недостаточно данных для построения графика.")
