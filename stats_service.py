@@ -6,9 +6,9 @@ import stats_builder
 
 
 def rebuild_stats_for_date(training_date, user_id: int = 1) -> tuple[int, int]:
-    workout_rows = db.get_workouts_by_date(training_date)
+    workout_rows = db.get_workouts_by_date(training_date, user_id=user_id)
 
-    db.clear_daily_stats_for_date(training_date)
+    db.clear_daily_stats_for_date(training_date, user_id=user_id)
 
     if not workout_rows:
         return 0, 0

@@ -6,12 +6,7 @@ import reference_builder
 
 
 def rebuild_all_references(user_id: int = 1) -> int:
-    workout_rows = db.get_all_workouts()
-    workout_rows = [
-        dict(row)
-        for row in workout_rows
-        if row.get("user_id") == user_id
-    ]
+    workout_rows = db.get_all_workouts(user_id=user_id)
 
     db.create_exercise_reference_values_table()
     db.clear_exercise_reference_values(user_id=user_id)

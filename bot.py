@@ -133,7 +133,7 @@ def expand_values(values, sets_count, field_name, cast_func):
         raise ValueError(f"Поле `{field_name}` содержит некорректные значения.")
 
 
-def parse_workout_text(text: str):
+def parse_workout_text(text: str, user_id: int):
     data = {}
 
     for line in text.splitlines():
@@ -209,7 +209,7 @@ def parse_workout_text(text: str):
     for i in range(sets_count):
         rows.append(
             {
-                "user_id": 1,
+                "user_id": user_id,
                 "date": date.today(),
                 "exercise": exercise,
                 "category": category,
@@ -325,7 +325,22 @@ def split_telegram_text(text: str, limit: int = 3900) -> list[str]:
     return chunks
 
 
+def get_current_user_id(update: Update) -> int:
+    telegram_user = update.effective_user
+
+    if telegram_user is None:
+        raise ValueError("Не удалось определить Telegram-пользователя.")
+
+    return db.get_or_create_user(
+        telegram_user_id=telegram_user.id,
+        username=telegram_user.username,
+        first_name=telegram_user.first_name,
+    )
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    get_current_user_id(update)
+
     keyboard = [
         [InlineKeyboardButton("Добавить тренировку", callback_data=CALLBACK_ADD_AI_WORKOUT)]
     ]
@@ -360,6 +375,7 @@ async def ai_add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    user_id = get_current_user_id(update)
 
     if query.data.startswith(CALLBACK_LAST_DATE_PREFIX):
         date_value = query.data.removeprefix(CALLBACK_LAST_DATE_PREFIX)
@@ -370,7 +386,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text(f"Некорректная дата: {date_value}")
             return
 
-        rows = db.get_workouts_by_date(training_date)
+        rows = db.get_workouts_by_date(training_date, user_id=user_id)
         for chunk in split_telegram_text(format_workouts_for_date(training_date, rows)):
             await query.message.reply_text(chunk)
         return
@@ -439,14 +455,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             references_count = reference_service.rebuild_references_for_exercises(
                 exercise_keys=exercise_keys,
-                user_id=1,
+                user_id=user_id,
             )
 
             print("REFERENCE REBUILD RESULT:", references_count)
 
             rebuild_result = stats_service.rebuild_stats_for_dates(
                 training_dates=training_dates,
-                user_id=1,
+                user_id=user_id,
             )
 
             print("STATS REBUILD RESULT:", rebuild_result)
@@ -482,18 +498,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = get_current_user_id(update)
+
     if context.user_data.get(WAITING_FOR_AI_WORKOUT):
         await update.message.reply_text("Разбираю тренировку через Gemini...")
 
         try:
 
-            existing_exercises = db.get_existing_exercise_names()
+            existing_exercises = db.get_existing_exercise_names(user_id=user_id)
 
             rows = gemini_parser.parse_workout_with_gemini(
                 
                 text=update.message.text,
                 default_date=date.today(),
-                user_id=1,
+                user_id=user_id,
                 existing_exercises=existing_exercises,
             )
          
@@ -538,7 +556,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        rows = parse_workout_text(update.message.text)
+        rows = parse_workout_text(update.message.text, user_id=user_id)
         context.user_data[PENDING_ROWS] = rows
 
         keyboard = [
@@ -574,7 +592,8 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 async def volume(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    rows = db.get_volume_by_date()
+    user_id = get_current_user_id(update)
+    rows = db.get_volume_by_date(user_id=user_id)
 
     if not rows:
         await update.message.reply_text("Данных пока нет.")
@@ -593,19 +612,20 @@ async def volume(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def score(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    latest_date = db.get_latest_training_date()
+    user_id = get_current_user_id(update)
+    latest_date = db.get_latest_training_date(user_id=user_id)
 
     if not latest_date:
         await update.message.reply_text("В базе пока нет тренировок.")
         return
 
-    rows = db.get_workouts_by_date(latest_date)
+    rows = db.get_workouts_by_date(latest_date, user_id=user_id)
 
     if not rows:
         await update.message.reply_text("Не нашёл строк для последней даты тренировки.")
         return
 
-    reference_values = reference_service.get_reference_values(user_id=1)
+    reference_values = reference_service.get_reference_values(user_id=user_id)
     result = analytics.calculate_session_scores(
         rows,
         reference_values=reference_values,
@@ -726,6 +746,7 @@ async def send_chart(update: Update, output_path: Path, caption: str):
 
 
 async def muscle_trend(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = get_current_user_id(update)
     period_token = context.args[0] if context.args else "90d"
 
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
@@ -736,7 +757,7 @@ async def muscle_trend(update: Update, context: ContextTypes.DEFAULT_TYPE):
             period_token=period_token,
             output_path=output_path,
             top_n=8,
-            user_id=1,
+            user_id=user_id,
         )
         await send_chart(
             update=update,
@@ -753,6 +774,7 @@ async def muscle_trend(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def score_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = get_current_user_id(update)
     period_token = context.args[0] if context.args else "latest"
 
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
@@ -760,7 +782,7 @@ async def score_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         if period_token == "latest":
-            rows = db.get_all_workouts()
+            rows = db.get_all_workouts(user_id=user_id)
 
             if not rows:
                 await update.message.reply_text("В базе пока нет тренировок.")
@@ -769,14 +791,14 @@ async def score_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             charts.save_latest_score_dashboard(
                 rows=rows,
                 output_path=output_path,
-                reference_values=reference_service.get_reference_values(user_id=1),
+                reference_values=reference_service.get_reference_values(user_id=user_id),
             )
             caption = "Визуальная сводка по последней тренировке."
         else:
             stats_charts.save_period_dashboard(
                 period_token=period_token,
                 output_path=output_path,
-                user_id=1,
+                user_id=user_id,
             )
             caption = f"Визуальная сводка за период: {period_token}"
 
@@ -795,6 +817,7 @@ async def score_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def stats_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = get_current_user_id(update)
     period_token = context.args[0] if context.args else "30d"
 
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
@@ -804,7 +827,7 @@ async def stats_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stats_charts.save_period_dashboard(
             period_token=period_token,
             output_path=output_path,
-            user_id=1,
+            user_id=user_id,
         )
         await send_chart(
             update=update,
@@ -821,6 +844,7 @@ async def stats_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def top_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = get_current_user_id(update)
     target, metric, period_token, limit = parse_top_chart_args(context.args)
 
     if target is None or target in {"help", "?", "помощь"}:
@@ -843,7 +867,7 @@ async def top_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             period_token=period_token,
             limit=limit,
             output_path=output_path,
-            user_id=1,
+            user_id=user_id,
         )
         await send_chart(
             update=update,
@@ -860,6 +884,7 @@ async def top_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def exercise_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = get_current_user_id(update)
     if not context.args:
         await update.message.reply_text(
             "Укажи упражнение. Например: /exercise_chart bench_press 90d"
@@ -884,7 +909,7 @@ async def exercise_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             exercise_input=exercise_input,
             period_token=period_token,
             output_path=output_path,
-            user_id=1,
+            user_id=user_id,
         )
         await send_chart(
             update=update,
@@ -901,6 +926,7 @@ async def exercise_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def muscle_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = get_current_user_id(update)
     if not context.args:
         await update.message.reply_text(
             "Укажи мышцу. Например: /muscle_chart chest 90d"
@@ -925,7 +951,7 @@ async def muscle_chart(update: Update, context: ContextTypes.DEFAULT_TYPE):
             muscle_input=muscle_input,
             period_token=period_token,
             output_path=output_path,
-            user_id=1,
+            user_id=user_id,
         )
         await send_chart(
             update=update,
@@ -1023,17 +1049,21 @@ async def legacy_exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = get_current_user_id(update)
+
     if context.args and context.args[0].lower() in {"help", "?", "помощь"}:
         await update.message.reply_text(stats_formatter.format_stats_help())
         return
 
     period_token = context.args[0] if context.args else "30d"
-    data = stats_view_service.build_overview(period_token=period_token, user_id=1)
+    data = stats_view_service.build_overview(period_token=period_token, user_id=user_id)
 
     await update.message.reply_text(stats_formatter.format_overview(data))
 
 
 async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = get_current_user_id(update)
+
     if not context.args or context.args[0].lower() in {"help", "?", "помощь"}:
         await update.message.reply_text(stats_formatter.format_stats_help())
         return
@@ -1056,7 +1086,7 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
             period_token=period_token,
             metric=metric,
             limit=limit,
-            user_id=1,
+            user_id=user_id,
         )
         await update.message.reply_text(stats_formatter.format_top_exercises(data))
         return
@@ -1066,7 +1096,7 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
             period_token=period_token,
             metric=metric,
             limit=limit,
-            user_id=1,
+            user_id=user_id,
         )
         await update.message.reply_text(stats_formatter.format_top_muscles(data))
         return
@@ -1077,6 +1107,8 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = get_current_user_id(update)
+
     if not context.args:
         await update.message.reply_text(
             "Укажи упражнение. Например:\n"
@@ -1097,13 +1129,15 @@ async def exercise(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = stats_view_service.build_exercise_detail(
         exercise_input=exercise_input,
         period_token=period_token,
-        user_id=1,
+        user_id=user_id,
     )
 
     await update.message.reply_text(stats_formatter.format_exercise_detail(data))
 
 
 async def muscle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = get_current_user_id(update)
+
     if not context.args:
         await update.message.reply_text(
             "Укажи мышцу. Например:\n"
@@ -1124,7 +1158,7 @@ async def muscle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = stats_view_service.build_muscle_detail(
         muscle_input=muscle_input,
         period_token=period_token,
-        user_id=1,
+        user_id=user_id,
     )
 
     await update.message.reply_text(stats_formatter.format_muscle_detail(data))
@@ -1181,7 +1215,8 @@ async def last(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def last(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    rows = db.get_latest_training_dates(limit=10, user_id=1)
+    user_id = get_current_user_id(update)
+    rows = db.get_latest_training_dates(limit=10, user_id=user_id)
 
     if not rows:
         await update.message.reply_text("В базе пока нет тренировок.")
